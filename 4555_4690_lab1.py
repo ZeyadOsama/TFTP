@@ -1,7 +1,9 @@
 # Don't forget to change this file's name before submission.
-import sys
-import os
 import enum
+import os
+import socket
+import struct
+import sys
 
 
 class TftpProcessor(object):
@@ -35,7 +37,31 @@ class TftpProcessor(object):
         Represents a TFTP packet type add the missing types here and
         modify the existing values as necessary.
         """
-        RRQ = 1
+        RRQ, WRQ, DATA, ACK, ERROR = range(1, 6)
+
+    class Constants:
+
+        class Types(str):
+            RRQ = 'RRQ'
+            WRQ = 'WRQ'
+            ACK = 'ACK'
+            DATA = 'DATA'
+            ERROR = 'ERR'
+
+        class Opcodes(int):
+            """
+            Represents a TFTP packet type add the missing types here and
+            modify the existing values as necessary.
+            """
+            RRQ, WRQ, DATA, ACK, ERROR = range(1, 6)
+
+        MODE = 'octet'
+
+        FORMATS = {Types.RRQ: '!H{}sx{}sx',
+                   Types.WRQ: '!H{}sx{}sx',
+                   Types.ACK: '!HH',
+                   Types.DATA: '!HH{}s',
+                   Types.ERROR: '!HH{}sx'}
 
     def __init__(self):
         """
@@ -45,7 +71,6 @@ class TftpProcessor(object):
         Here's an example of what you can do inside this function.
         """
         self.packet_buffer = []
-        pass
 
     def process_udp_packet(self, packet_data, packet_source):
         """
@@ -57,24 +82,50 @@ class TftpProcessor(object):
         # add the packet to be sent to self.packet_buffer
         # feel free to remove this line
         print(f"Received a packet from {packet_source}")
-        in_packet = self._parse_udp_packet(packet_data)
-        out_packet = self._do_some_logic(in_packet)
+        in_packet = self._unpack_udp_packet(packet_data)
+        out_packet = self._pack_udp_packet(in_packet)
 
         # This shouldn't change.
         self.packet_buffer.append(out_packet)
 
-    def _parse_udp_packet(self, packet_bytes):
+    def _unpack_udp_packet(self, packet_bytes):
         """
         You'll use the struct module here to determine
         the type of the packet and extract other available
         information.
         """
+        return {
+            self.Constants.Opcodes.DATA: self._unpack_DATA(packet_bytes),
+            self.Constants.Opcodes.ACK: self._unpack_ACK(packet_bytes),
+            self.Constants.Opcodes.ERROR: self._unpack_ERROR(packet_bytes)
+        }[int.from_bytes(packet_bytes[:2], byteorder='big')]
+
+    def _unpack_DATA(self, packet_bytes):
         pass
 
-    def _do_some_logic(self, input_packet):
+    def _unpack_ACK(self, packet_bytes):
+        pass
+
+    def _unpack_ERROR(self, packet_bytes):
+        pass
+
+    def _pack_udp_packet(self, input_packet):
         """
         Example of a private function that does some logic.
         """
+        return {
+            self.Constants.Opcodes.DATA: self._pack_DATA(input_packet),
+            self.Constants.Opcodes.ACK: self._pack_ACK(input_packet),
+            self.Constants.Opcodes.ERROR: self._pack_ERROR(input_packet)
+        }[int.from_bytes(input_packet[:2], byteorder='big')]
+
+    def _pack_DATA(self, input_packet):
+        pass
+
+    def _pack_ACK(self, input_packet):
+        pass
+
+    def _pack_ERROR(self, input_packet):
         pass
 
     def get_next_output_packet(self):
@@ -106,7 +157,12 @@ class TftpProcessor(object):
         accept is the file name. Remove this function if you're
         implementing a server.
         """
-        pass
+        values = (self.Constants.Types.RRQ, file_path_on_server, 0, self.Constants.MODE, 0)
+        s = struct.Struct(
+            self.Constants.FORMATS[self.Constants.Types.RRQ].format(
+                len(file_path_on_server),
+                len(self.Constants.MODE)))
+        return s.pack(*values)
 
     def upload_file(self, file_path_on_server):
         """
@@ -116,10 +172,17 @@ class TftpProcessor(object):
         accept is the file name. Remove this function if you're
         implementing a server.
         """
-        pass
+        try:
+            open(file_path_on_server, "rb")
+        except IOError:
+            print("File not found.")
+            return None
 
 
 def check_file_name():
+    """
+    Checks script's name for lab purposes.
+    """
     script_name = os.path.basename(__file__)
     import re
     matches = re.findall(r"(\d{4}_)+lab1\.(py|rar|zip)", script_name)
@@ -128,14 +191,21 @@ def check_file_name():
     pass
 
 
+def default_port():
+    """
+    :return: tftp and udp default port number for initiating the communication process.
+    """
+    return socket.getservbyname('tftp', 'udp')
+
+
 def setup_sockets(address):
     """
     Socket logic MUST NOT be written in the TftpProcessor
     class. It knows nothing about the sockets.
 
-    Feel free to delete this function.
+    :return client's socket, server address (IP address, port number)
     """
-    pass
+    return socket.socket(socket.AF_INET, socket.SOCK_DGRAM), (address, default_port())
 
 
 def do_socket_logic():
@@ -179,7 +249,7 @@ def get_arg(param_index, default=None):
         else:
             print(e)
             print(
-                f"[FATAL] The comamnd-line argument #[{param_index}] is missing")
+                f"[FATAL] The command-line argument #[{param_index}] is missing")
             exit(-1)  # Program execution failed.
 
 
