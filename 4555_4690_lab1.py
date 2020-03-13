@@ -98,7 +98,7 @@ class TftpProcessor(object):
             self.Constants.Opcodes.DATA: self._unpack_DATA(packet_bytes),
             self.Constants.Opcodes.ACK: self._unpack_ACK(packet_bytes),
             self.Constants.Opcodes.ERROR: self._unpack_ERROR(packet_bytes)
-        }[int.from_bytes(packet_bytes[:2], byteorder='big')]
+        }.get(int.from_bytes(packet_bytes[:2], byteorder='big'), '[ERROR] No such opcode.')
 
     def _unpack_DATA(self, packet_bytes):
         pass
@@ -117,7 +117,7 @@ class TftpProcessor(object):
             self.Constants.Opcodes.DATA: self._pack_DATA(input_packet),
             self.Constants.Opcodes.ACK: self._pack_ACK(input_packet),
             self.Constants.Opcodes.ERROR: self._pack_ERROR(input_packet)
-        }[int.from_bytes(input_packet[:2], byteorder='big')]
+        }.get(int.from_bytes(input_packet[0], byteorder='big'), '[ERROR] No such opcode.')
 
     def _pack_DATA(self, input_packet):
         pass
