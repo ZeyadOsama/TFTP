@@ -1,5 +1,4 @@
 # Don't forget to change this file's name before submission.
-import enum
 import os
 import socket
 import struct
@@ -32,45 +31,40 @@ class TftpProcessor(object):
     start with an "_", check the example below
     """
 
-    class TftpPacketType(enum.Enum):
-        """
-        Represents a TFTP packet type add the missing types here and
-        modify the existing values as necessary.
-        """
-        RRQ, WRQ, DATA, ACK, ERROR = range(1, 6)
-
     class Constants:
 
-        class Types(str):
-            RRQ = 'RRQ'
-            WRQ = 'WRQ'
-            ACK = 'ACK'
-            DATA = 'DATA'
-            ERROR = 'ERR'
+        class Types(int):
+            DATA, ACK, ERROR = range(3, 6)
 
-        class Opcodes(int):
-            """
-            Represents a TFTP packet type add the missing types here and
-            modify the existing values as necessary.
-            """
-            RRQ, WRQ, DATA, ACK, ERROR = range(1, 6)
+        class Requests(int):
+            RRQ, WRQ = range(1, 3)
 
+        class Lengths(int):
+            ACK = 4
+            DATA = 4
+            ERROR = 5
+
+        MAX_READ_BYTES = 1024
+        READ_BYTES = 512
         MODE = 'octet'
 
-        FORMATS = {Types.RRQ: '!H{}sx{}sx',
-                   Types.WRQ: '!H{}sx{}sx',
+        FORMATS = {Requests.RRQ: '!H{}sx{}sx',
+                   Requests.WRQ: '!H{}sx{}sx',
                    Types.ACK: '!HH',
                    Types.DATA: '!HH{}s',
                    Types.ERROR: '!HH{}sx'}
 
     def __init__(self):
         """
-        Add and initialize the *internal* fields you need.
+        Add and initialize the internal fields you need.
         Do NOT change the arguments passed to this function.
 
         Here's an example of what you can do inside this function.
         """
         self.packet_buffer = []
+        self.data_buffer = []
+        self.file = None
+        self.check_mark = False
 
     def process_udp_packet(self, packet_data, packet_source):
         """
@@ -84,49 +78,95 @@ class TftpProcessor(object):
         print(f"Received a packet from {packet_source}")
         in_packet = self._unpack_udp_packet(packet_data)
         out_packet = self._pack_udp_packet(in_packet)
-
+        if type(out_packet) == str:
+            print(out_packet)
+            return
+        if out_packet is None:
+            print("Data Upload Complete")
+            self.file.close()
+            return
         # This shouldn't change.
         self.packet_buffer.append(out_packet)
 
-    def _unpack_udp_packet(self, packet_bytes):
+    def _unpack_udp_packet(self, packet_data):
         """
         You'll use the struct module here to determine
         the type of the packet and extract other available
         information.
         """
-        return {
-            self.Constants.Opcodes.DATA: self._unpack_DATA(packet_bytes),
-            self.Constants.Opcodes.ACK: self._unpack_ACK(packet_bytes),
-            self.Constants.Opcodes.ERROR: self._unpack_ERROR(packet_bytes)
-        }.get(int.from_bytes(packet_bytes[:2], byteorder='big'), '[ERROR] No such opcode.')
+        opcode = int.from_bytes(packet_data[:2], byteorder='big')
+        if opcode == self.Constants.Types.DATA:
+            return self._unpack_DATA(packet_data)
+        elif opcode == self.Constants.Types.ACK:
+            return self._unpack_ACK(packet_data)
+        elif opcode == self.Constants.Types.ERROR:
+            return self._unpack_ERROR(packet_data)
 
-    def _unpack_DATA(self, packet_bytes):
-        pass
+    def _unpack_DATA(self, packet_data):
+        return struct.unpack(
+            self.Constants.FORMATS[self.Constants.Types.DATA].format(len(packet_data) - self.Constants.Lengths.DATA),
+            packet_data)
 
-    def _unpack_ACK(self, packet_bytes):
-        pass
+    def _unpack_ACK(self, packet_data):
+        return struct.unpack(self.Constants.FORMATS[self.Constants.Types.ACK], packet_data)
 
-    def _unpack_ERROR(self, packet_bytes):
-        pass
+    def _unpack_ERROR(self, packet_data):
+        return struct.unpack(
+            self.Constants.FORMATS[self.Constants.Types.ERROR].format(len(packet_data) - self.Constants.Lengths.ERROR),
+            packet_data)
 
     def _pack_udp_packet(self, input_packet):
         """
         Example of a private function that does some logic.
         """
-        return {
-            self.Constants.Opcodes.DATA: self._pack_DATA(input_packet),
-            self.Constants.Opcodes.ACK: self._pack_ACK(input_packet),
-            self.Constants.Opcodes.ERROR: self._pack_ERROR(input_packet)
-        }.get(int.from_bytes(input_packet[0], byteorder='big'), '[ERROR] No such opcode.')
+        opcode = input_packet[0]
+        if opcode == 3:
+            return self._pack_ACK(input_packet)
+        elif opcode == 4:
+            return self._pack_DATA(input_packet)
+        elif opcode == 5:
+            return self._pack_ERROR(input_packet)
 
     def _pack_DATA(self, input_packet):
-        pass
+        block_num = input_packet[-1] + 1
+        print(f'[DATA] Block: {input_packet[1]}')
+        if input_packet[-1] == len(self.data_buffer):
+            self.check_mark = True
+        if self.has_pending_data():
+            data = self.get_next_data()
+            values = (self.Constants.Types.DATA, block_num, data)
+            s = struct.Struct(
+                self.Constants.FORMATS[self.Constants.Types.DATA].format(
+                    len(data)))
+            return s.pack(*values)
 
     def _pack_ACK(self, input_packet):
-        pass
+        block_num = input_packet[1]
+        print(f'[ACK] Block: {input_packet[1]}')
+        if len(input_packet[2]) != self.Constants.READ_BYTES:
+            self.check_mark = True
+        self._writeFile(input_packet[2])
+        values = (self.Constants.Types.ACK, block_num)
+        s = struct.Struct(self.Constants.FORMATS[self.Constants.Types.ACK])
+        return s.pack(*values)
 
     def _pack_ERROR(self, input_packet):
-        pass
+        return input_packet[2].decode('ascii')
+
+    def _packetize_file(self):
+        ba_file = bytearray(self.file.read())
+        for i in range(0, len(ba_file), self.Constants.READ_BYTES):
+            if i + self.Constants.READ_BYTES > len(ba_file):
+                data = ba_file[i:]
+            else:
+                data = ba_file[i:i + self.Constants.READ_BYTES]
+            self.data_buffer.append(data)
+
+    def get_next_data(self):
+        return self.data_buffer.pop(0)
+
+    def has_pending_data(self):
+        return len(self.data_buffer) != 0
 
     def get_next_output_packet(self):
         """
@@ -149,6 +189,9 @@ class TftpProcessor(object):
         """
         return len(self.packet_buffer) != 0
 
+    def _writeFile(self, data):
+        self.file.write(data)
+
     def request_file(self, file_path_on_server):
         """
         This method is only valid if you're implementing
@@ -157,12 +200,7 @@ class TftpProcessor(object):
         accept is the file name. Remove this function if you're
         implementing a server.
         """
-        values = (self.Constants.Types.RRQ, file_path_on_server, 0, self.Constants.MODE, 0)
-        s = struct.Struct(
-            self.Constants.FORMATS[self.Constants.Types.RRQ].format(
-                len(file_path_on_server),
-                len(self.Constants.MODE)))
-        return s.pack(*values)
+        return self._file_request(self.Constants.Requests.RRQ, file_path_on_server)
 
     def upload_file(self, file_path_on_server):
         """
@@ -172,17 +210,30 @@ class TftpProcessor(object):
         accept is the file name. Remove this function if you're
         implementing a server.
         """
-        try:
-            open(file_path_on_server, "rb")
-        except IOError:
-            print("File not found.")
-            return None
+        return self._file_request(self.Constants.Requests.WRQ, file_path_on_server)
+
+    def _file_request(self, request: Constants.Requests, file_path_on_server):
+        if request == self.Constants.Requests.RRQ:
+            self.file = open(file_path_on_server, 'wb')
+        else:
+            try:
+                self.file = open(file_path_on_server, 'rb')
+            except IOError:
+                print(f'[ERROR] File not found.')
+                exit(-1)
+            self._packetize_file()
+        return self._pack_request(request, file_path_on_server)
+
+    def _pack_request(self, request, file_path_on_server):
+        values = (request, file_path_on_server.encode('ascii'), self.Constants.MODE.encode('ascii'))
+        s = struct.Struct(
+            self.Constants.FORMATS[request].format(
+                len(file_path_on_server),
+                len(self.Constants.MODE)))
+        return s.pack(*values)
 
 
 def check_file_name():
-    """
-    Checks script's name for lab purposes.
-    """
     script_name = os.path.basename(__file__)
     import re
     matches = re.findall(r"(\d{4}_)+lab1\.(py|rar|zip)", script_name)
@@ -208,14 +259,30 @@ def setup_sockets(address):
     return socket.socket(socket.AF_INET, socket.SOCK_DGRAM), (address, default_port())
 
 
-def do_socket_logic():
-    """
-    Example function for some helper logic, in case you
-    want to be tidy and avoid stuffing the main function.
+def start(processor, client):
+    while True:
+        data, source = client.recvfrom(TftpProcessor.Constants.MAX_READ_BYTES)
+        processor.process_udp_packet(data, source)
+        if processor.has_pending_packets_to_be_sent():
+            client.sendto(processor.get_next_output_packet(), source)
+            if processor.check_mark:
+                break
+        else:
+            break
 
-    Feel free to delete this function.
-    """
-    pass
+
+def start_RRQ(processor, file_name):
+    print(f'Attempting to download [{file_name}]...')
+    return processor.request_file(file_name)
+
+
+def start_WRQ(processor, file_name):
+    print(f'Attempting to upload [{file_name}]...')
+    WRQ = processor.upload_file(file_name)
+    if WRQ is None:
+        print(f'[ERROR] {file_name} does not exist.')
+        exit(-1)
+    return WRQ
 
 
 def parse_user_input(address, operation, file_name=None):
@@ -225,21 +292,29 @@ def parse_user_input(address, operation, file_name=None):
     # But don't add socket code in the TftpProcessor class.
     # Feel free to delete this code as long as the
     # functionality is preserved.
-    if operation == "push":
-        print(f"Attempting to upload [{file_name}]...")
-        pass
-    elif operation == "pull":
-        print(f"Attempting to download [{file_name}]...")
-        pass
+    client_socket, server_address = setup_sockets(address)
+
+    processor = TftpProcessor()
+    request = None
+
+    if operation == 'push':
+        request = start_WRQ(processor, file_name)
+    elif operation == 'pull':
+        request = start_RRQ(processor, file_name)
+    else:
+        print(f'[ERROR] {operation} does not exist.')
+        exit(-1)
+
+    client_socket.sendto(request, server_address)
+    start(processor, client_socket)
 
 
 def get_arg(param_index, default=None):
     """
-        Gets a command line argument by index (note: index starts from 1)
-        If the argument is not supplies, it tries to use a default value.
-
-        If a default value isn't supplied, an error message is printed
-        and terminates the program.
+    Gets a command line argument by index (note: index starts from 1)
+    If the argument is not supplies, it tries to use a default value.
+    If a default value isn't supplied, an error message is printed
+    and terminates the program.
     """
     try:
         return sys.argv[param_index]
@@ -248,9 +323,8 @@ def get_arg(param_index, default=None):
             return default
         else:
             print(e)
-            print(
-                f"[FATAL] The command-line argument #[{param_index}] is missing")
-            exit(-1)  # Program execution failed.
+            print(f"[FATAL] The command-line argument #[{param_index}] is missing")
+            exit(-1)
 
 
 def main():
@@ -270,7 +344,7 @@ def main():
     # are provided. Feel free to modify them.
     ip_address = get_arg(1, "127.0.0.1")
     operation = get_arg(2, "pull")
-    file_name = get_arg(3, "test.txt")
+    file_name = get_arg(3, "hello.txt")
 
     # Modify this as needed.
     parse_user_input(ip_address, operation, file_name)
