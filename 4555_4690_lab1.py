@@ -48,6 +48,8 @@ class TftpProcessor(object):
         READ_BYTES = 512
         MODE = 'octet'
 
+        BLOCK_INDEX = 1
+
         FORMATS = {Requests.RRQ: '!H{}sx{}sx',
                    Requests.WRQ: '!H{}sx{}sx',
                    Types.ACK: '!HH',
@@ -64,7 +66,7 @@ class TftpProcessor(object):
         self.packet_buffer = []
         self.data_buffer = []
         self.file = None
-        self.check_mark = False
+        self.check_mark: bool = False
 
     def process_udp_packet(self, packet_data, packet_source):
         """
@@ -75,14 +77,14 @@ class TftpProcessor(object):
         # Add your logic here, after your logic is done,
         # add the packet to be sent to self.packet_buffer
         # feel free to remove this line
-        print(f"Received a packet from {packet_source}")
+        print(f'\nReceived packet from {packet_source}.')
         in_packet = self._unpack_udp_packet(packet_data)
         out_packet = self._pack_udp_packet(in_packet)
         if type(out_packet) == str:
             print(out_packet)
             return
         if out_packet is None:
-            print("Data Upload Complete")
+            print(f'\nData upload to {packet_source} complete.')
             self.file.close()
             return
         # This shouldn't change.
@@ -103,17 +105,23 @@ class TftpProcessor(object):
             return self._unpack_ERROR(packet_data)
 
     def _unpack_DATA(self, packet_data):
-        return struct.unpack(
+        s = struct.unpack(
             self.Constants.FORMATS[self.Constants.Types.DATA].format(len(packet_data) - self.Constants.Lengths.DATA),
             packet_data)
+        print(f'[UNPACK][DATA] Block: {s[self.Constants.BLOCK_INDEX]}')
+        return s
 
     def _unpack_ACK(self, packet_data):
-        return struct.unpack(self.Constants.FORMATS[self.Constants.Types.ACK], packet_data)
+        s = struct.unpack(self.Constants.FORMATS[self.Constants.Types.ACK], packet_data)
+        print(f'[UNPACK][ACK] Block: {s[self.Constants.BLOCK_INDEX]}')
+        return s
 
     def _unpack_ERROR(self, packet_data):
-        return struct.unpack(
+        s = struct.unpack(
             self.Constants.FORMATS[self.Constants.Types.ERROR].format(len(packet_data) - self.Constants.Lengths.ERROR),
             packet_data)
+        print(f'[UNPACK][ERROR] Block: {s[self.Constants.BLOCK_INDEX]}')
+        return s
 
     def _pack_udp_packet(self, input_packet):
         """
@@ -129,7 +137,7 @@ class TftpProcessor(object):
 
     def _pack_DATA(self, input_packet):
         block_num = input_packet[-1] + 1
-        print(f'[DATA] Block: {input_packet[1]}')
+        print(f'[PACK][DATA] Block: {input_packet[self.Constants.BLOCK_INDEX]}')
         if input_packet[-1] == len(self.data_buffer):
             self.check_mark = True
         if self.has_pending_data():
@@ -142,7 +150,7 @@ class TftpProcessor(object):
 
     def _pack_ACK(self, input_packet):
         block_num = input_packet[1]
-        print(f'[ACK] Block: {input_packet[1]}')
+        print(f'[PACK][ACK] Block: {input_packet[self.Constants.BLOCK_INDEX]}')
         if len(input_packet[2]) != self.Constants.READ_BYTES:
             self.check_mark = True
         self._writeFile(input_packet[2])
@@ -151,6 +159,7 @@ class TftpProcessor(object):
         return s.pack(*values)
 
     def _pack_ERROR(self, input_packet):
+        print(f'[PACK][ERROR] Block: {input_packet[self.Constants.BLOCK_INDEX]}')
         return input_packet[2].decode('ascii')
 
     def _packetize_file(self):
@@ -161,6 +170,7 @@ class TftpProcessor(object):
             else:
                 data = ba_file[i:i + self.Constants.READ_BYTES]
             self.data_buffer.append(data)
+        print(f'[LOG] Packetize done.')
 
     def get_next_data(self):
         return self.data_buffer.pop(0)
@@ -343,7 +353,7 @@ def main():
     # The IP of the server, some default values
     # are provided. Feel free to modify them.
     ip_address = get_arg(1, "127.0.0.1")
-    operation = get_arg(2, "pull")
+    operation = get_arg(2, "push")
     file_name = get_arg(3, "hello.txt")
 
     # Modify this as needed.
