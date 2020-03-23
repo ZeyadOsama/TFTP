@@ -1,5 +1,4 @@
 # Don't forget to change this file's name before submission.
-import os
 import socket
 import struct
 import sys
@@ -243,15 +242,6 @@ class TftpProcessor(object):
         return s.pack(*values)
 
 
-def check_file_name():
-    script_name = os.path.basename(__file__)
-    import re
-    matches = re.findall(r"(\d{4}_)+lab1\.(py|rar|zip)", script_name)
-    if not matches:
-        print(f"[WARN] File name is invalid [{script_name}]")
-    pass
-
-
 def default_port():
     """
     :return: tftp and udp default port number for initiating the communication process.
@@ -344,7 +334,6 @@ def main():
     """
     print("*" * 50)
     print("[LOG] Printing command line arguments\n", ",".join(sys.argv))
-    check_file_name()
     print("*" * 50)
 
     # This argument is required.
